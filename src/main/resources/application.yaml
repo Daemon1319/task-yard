@@ -1,0 +1,91 @@
+# 1. GLOBAL SETTINGS & DEFAULTS
+spring:
+  application:
+    name: task-yard
+  profiles:
+    active: local
+  jpa:
+    open-in-view: false
+  rabbitmq:
+    listener:
+      simple:
+        concurrency: 5
+        max-concurrency: 10
+        acknowledge-mode: manual
+        default-requeue-rejected: false
+
+task-yard:
+  max-retries: 3
+  retry-delays-ms: [5000, 15000, 30000]
+  chaos:
+    default-enabled: false
+    default-failure-rate: 0.3
+
+---
+# 2. LOCAL PROFILE (Docker Desktop)
+spring:
+  config:
+    activate:
+      on-profile: local
+
+  datasource:
+    url: jdbc:postgresql://localhost:5436/task-yard-local
+    username: postgres
+    password: postgres
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+
+server:
+  port: 8083
+
+app:
+  cors:
+    allowed-origins: http://localhost:3000
+
+---
+# 3. PROD PROFILE (Neon + CloudAMQP)
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  rabbitmq:
+    addresses: ${CLOUDAMQP_URL}
+
+server:
+  port: ${PORT:8083}
+  shutdown: graceful
+  forward-headers-strategy: NATIVE
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
