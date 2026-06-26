@@ -4,13 +4,16 @@ import com.allan.task_yard.config.RabbitMQConfig;
 import com.allan.task_yard.config.RabbitMQProperties;
 import com.allan.task_yard.entity.Job;
 import com.allan.task_yard.enums.JobStatus;
+import com.allan.task_yard.enums.PipelineEventType;
 import com.allan.task_yard.repository.JobRepository;
 import com.allan.task_yard.service.ChaosState;
+import com.allan.task_yard.service.EventBus;
 import com.allan.task_yard.service.JobPublisherService;
 import com.rabbitmq.client.Channel;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -28,16 +31,19 @@ public class JobWorker {
   private final JobRepository jobRepository;
   private final JobPublisherService publisherService;
   private final ChaosState chaosState;
+  private final EventBus eventBus;
   private final RabbitMQProperties properties;
 
   public JobWorker(
       JobRepository jobRepository,
       JobPublisherService publisherService,
       ChaosState chaosState,
+      EventBus eventBus,
       RabbitMQProperties properties) {
     this.jobRepository = jobRepository;
     this.publisherService = publisherService;
     this.chaosState = chaosState;
+    this.eventBus = eventBus;
     this.properties = properties;
   }
 
@@ -70,6 +76,11 @@ public class JobWorker {
     job.setStatus(JobStatus.PROCESSING);
     jobRepository.save(job);
 
+    eventBus.emit(PipelineEventType.JOB_PROCESSING, Map.of(
+        "jobId", jobId.toString(),
+        "jobType", job.getJobType().name()
+    ));
+
     try {
       if (chaosState.shouldFail()) {
         throw new JobProcessingException("Simulated failure (chaos mode)");
@@ -80,6 +91,11 @@ public class JobWorker {
       jobRepository.save(job);
       log.debug("Job {} completed", jobId);
 
+      eventBus.emit(PipelineEventType.JOB_COMPLETED, Map.of(
+          "jobId", jobId.toString(),
+          "jobType", job.getJobType().name()
+      ));
+
     } catch (Exception ex) {
       String reason = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
       handleFailure(job, reason);
@@ -88,21 +104,36 @@ public class JobWorker {
 
   private void handleFailure(Job job, String reason) {
     int attempt = job.getRetryCount() + 1;
-    job.setRetryCount(attempt);
     job.setLastError(reason);
 
     if (attempt <= job.getMaxRetries()) {
+      job.setRetryCount(attempt);
+      long delayMs = delayForAttempt(attempt);
       job.setStatus(JobStatus.RETRYING);
-      job.setNextRetryAt(Instant.now().plusMillis(delayForAttempt(attempt)));
+      job.setNextRetryAt(Instant.now().plusMillis(delayMs));
       jobRepository.save(job);
       publisherService.publishForRetry(job.getId(), attempt);
       log.info("Job {} failed (attempt {}/{}) — retrying: {}", job.getId(), attempt, job.getMaxRetries(), reason);
+
+      eventBus.emit(PipelineEventType.JOB_RETRYING, Map.of(
+          "jobId", job.getId().toString(),
+          "jobType", job.getJobType().name(),
+          "attempt", attempt,
+          "maxRetries", job.getMaxRetries(),
+          "delayMs", delayMs
+      ));
     } else {
       job.setStatus(JobStatus.DEAD_LETTER);
       job.setNextRetryAt(null);
       jobRepository.save(job);
       publisherService.publishToDeadLetter(job.getId());
       log.warn("Job {} exhausted {} retries — moved to DEAD_LETTER: {}", job.getId(), job.getMaxRetries(), reason);
+
+      eventBus.emit(PipelineEventType.JOB_DEAD_LETTERED, Map.of(
+          "jobId", job.getId().toString(),
+          "jobType", job.getJobType().name(),
+          "reason", reason
+      ));
     }
   }
 

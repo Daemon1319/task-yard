@@ -4,6 +4,7 @@ import com.allan.task_yard.dto.ChaosRequest;
 import com.allan.task_yard.dto.CreateJobRequest;
 import com.allan.task_yard.dto.FloodRequest;
 import com.allan.task_yard.dto.JobResponse;
+import com.allan.task_yard.dto.OutboxEntryResponse;
 import com.allan.task_yard.enums.JobStatus;
 import com.allan.task_yard.service.ChaosState;
 import com.allan.task_yard.service.JobService;
@@ -64,6 +65,11 @@ public class QueueController {
   @GetMapping("/stats")
   public ResponseEntity<Map<JobStatus, Long>> getStats() {
     return ResponseEntity.ok(jobService.getStats());
+  }
+
+  @GetMapping("/outbox")
+  public ResponseEntity<List<OutboxEntryResponse>> getOutboxEntries() {
+    return ResponseEntity.ok(jobService.getOutboxEntries());
   }
 
   @GetMapping("/chaos")

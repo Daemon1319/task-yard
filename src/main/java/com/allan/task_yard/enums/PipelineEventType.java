@@ -1,0 +1,13 @@
+package com.allan.task_yard.enums;
+
+public enum PipelineEventType {
+  JOB_CREATED,
+  OUTBOX_PENDING,
+  OUTBOX_DISPATCHED,
+  OUTBOX_CONFIRMED,
+  OUTBOX_FAILED,
+  JOB_PROCESSING,
+  JOB_COMPLETED,
+  JOB_RETRYING,
+  JOB_DEAD_LETTERED
+}

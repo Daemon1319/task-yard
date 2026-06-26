@@ -6,11 +6,14 @@ import com.allan.task_yard.dto.ChaosRequest;
 import com.allan.task_yard.dto.CreateJobRequest;
 import com.allan.task_yard.dto.FloodRequest;
 import com.allan.task_yard.dto.JobResponse;
+import com.allan.task_yard.dto.OutboxEntryResponse;
 import com.allan.task_yard.entity.Job;
 import com.allan.task_yard.enums.JobStatus;
 import com.allan.task_yard.enums.JobType;
+import com.allan.task_yard.enums.PipelineEventType;
 import com.allan.task_yard.exception.JobNotFoundException;
 import com.allan.task_yard.repository.JobRepository;
+import com.allan.task_yard.repository.OutboxRepository;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
@@ -24,6 +27,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class JobService {
@@ -33,31 +37,45 @@ public class JobService {
   private static final int MAX_LIMIT = 200;
 
   private final JobRepository jobRepository;
+  private final OutboxRepository outboxRepository;
   private final JobPublisherService publisherService;
   private final ChaosState chaosState;
+  private final EventBus eventBus;
   private final AmqpAdmin amqpAdmin;
   private final RabbitMQProperties properties;
 
   public JobService(
       JobRepository jobRepository,
+      OutboxRepository outboxRepository,
       JobPublisherService publisherService,
       ChaosState chaosState,
+      EventBus eventBus,
       AmqpAdmin amqpAdmin,
       RabbitMQProperties properties) {
     this.jobRepository = jobRepository;
+    this.outboxRepository = outboxRepository;
     this.publisherService = publisherService;
     this.chaosState = chaosState;
+    this.eventBus = eventBus;
     this.amqpAdmin = amqpAdmin;
     this.properties = properties;
   }
 
+  @Transactional
   public JobResponse createJob(CreateJobRequest request) {
     Job job = jobRepository.save(new Job(request.jobType(), properties.maxRetries()));
-    publisherService.publishForProcessing(job.getId());
     log.info("Created job {} ({})", job.getId(), job.getJobType());
+
+    eventBus.emit(PipelineEventType.JOB_CREATED, Map.of(
+        "jobId", job.getId().toString(),
+        "jobType", job.getJobType().name()
+    ));
+
+    publisherService.publishForProcessing(job.getId());
     return JobResponse.from(job);
   }
 
+  @Transactional
   public List<JobResponse> floodJobs(FloodRequest request) {
     JobType[] types = JobType.values();
     List<JobResponse> created = new ArrayList<>(request.count());
@@ -65,6 +83,12 @@ public class JobService {
     for (int i = 0; i < request.count(); i++) {
       JobType type = types[ThreadLocalRandom.current().nextInt(types.length)];
       Job job = jobRepository.save(new Job(type, properties.maxRetries()));
+
+      eventBus.emit(PipelineEventType.JOB_CREATED, Map.of(
+          "jobId", job.getId().toString(),
+          "jobType", job.getJobType().name()
+      ));
+
       publisherService.publishForProcessing(job.getId());
       created.add(JobResponse.from(job));
     }
@@ -97,6 +121,14 @@ public class JobService {
     return stats;
   }
 
+  public List<OutboxEntryResponse> getOutboxEntries() {
+    return outboxRepository.findTop50ByOrderByCreatedAtDesc()
+        .stream()
+        .map(OutboxEntryResponse::from)
+        .toList();
+  }
+
+  @Transactional
   public JobResponse retryDeadLetterJob(UUID jobId) {
     Job job = jobRepository.findById(jobId).orElseThrow(() -> new JobNotFoundException(jobId));
 
@@ -127,6 +159,7 @@ public class JobService {
   }
 
   public void reset() {
+    outboxRepository.deleteAllInBatch();
     jobRepository.deleteAllInBatch();
 
     amqpAdmin.purgeQueue(RabbitMQConfig.JOB_QUEUE, false);
@@ -137,6 +170,6 @@ public class JobService {
       amqpAdmin.purgeQueue(RabbitMQConfig.retryQueueName(attempt), false);
     }
 
-    log.info("Reset: cleared all jobs and purged {} queues", retryQueueCount + 2);
+    log.info("Reset: cleared all jobs, outbox entries, and purged {} queues", retryQueueCount + 2);
   }
 }
