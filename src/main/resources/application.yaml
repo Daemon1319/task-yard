@@ -5,7 +5,10 @@ spring:
   profiles:
     active: local
   jpa:
+    hibernate:
+      ddl-auto: update
     open-in-view: false
+    show-sql: false
   rabbitmq:
     listener:
       simple:
@@ -34,8 +37,6 @@ spring:
     password: postgres
 
   jpa:
-    hibernate:
-      ddl-auto: update
     show-sql: false
 
   rabbitmq:
@@ -65,8 +66,6 @@ spring:
     driver-class-name: org.postgresql.Driver
 
   jpa:
-    hibernate:
-      ddl-auto: validate
     show-sql: false
 
   rabbitmq:
